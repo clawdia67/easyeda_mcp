@@ -1104,15 +1104,14 @@ function extractSegments(value: unknown): Segment[] {
   if (!Array.isArray(value)) {
     return [];
   }
+  if (value.length >= 4 && value.every((item) => typeof item === "number")) {
+    return coordinateChainToSegments(value as number[]);
+  }
   const segments: Segment[] = [];
   const points: Required<Position>[] = [];
   for (const item of value) {
-    if (Array.isArray(item) && item.length >= 4) {
-      const start = requiredPosition({ x: numberValue(item[0]), y: numberValue(item[1]) });
-      const end = requiredPosition({ x: numberValue(item[2]), y: numberValue(item[3]) });
-      if (start && end) {
-        segments.push({ start, end });
-      }
+    if (Array.isArray(item) && item.length >= 4 && item.every((entry) => typeof entry === "number")) {
+      segments.push(...coordinateChainToSegments(item as number[]));
       continue;
     }
     const point = Array.isArray(item)
@@ -1124,6 +1123,18 @@ function extractSegments(value: unknown): Segment[] {
   }
   for (let index = 1; index < points.length; index += 1) {
     segments.push({ start: points[index - 1], end: points[index] });
+  }
+  return segments;
+}
+
+function coordinateChainToSegments(chain: number[]): Segment[] {
+  const segments: Segment[] = [];
+  for (let index = 3; index < chain.length; index += 2) {
+    const start = requiredPosition({ x: numberValue(chain[index - 3]), y: numberValue(chain[index - 2]) });
+    const end = requiredPosition({ x: numberValue(chain[index - 1]), y: numberValue(chain[index]) });
+    if (start && end) {
+      segments.push({ start, end });
+    }
   }
   return segments;
 }

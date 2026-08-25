@@ -210,6 +210,32 @@ Exports Gerber fabrication data from the active PCB.
 
 Exports a PDF from the active schematic or PCB document.
 
+## Schematic Drawing
+
+### `easyeda_search_devices`
+
+Searches the EasyEDA Pro device library (system library by default) by keyword, part number, or LCSC number. Returned devices (`uuid` + `libraryUuid`) feed directly into `easyeda_sch_draw`'s `placeComponent` op.
+
+### `easyeda_sch_draw`
+
+Creates schematic primitives in the active schematic as one sequential batch of ops. Mutating: the confirmation text must explicitly confirm drawing (same phrases as `easyeda_confirmed_action`).
+
+Supported ops:
+
+- `placeComponent` — place a library device at `x`/`y` (10 mil units), optionally set `designator`/`name`; the result includes the created primitive id and the component's pin positions for follow-up wiring
+- `wire` — connected horizontal/vertical polyline segments, optional `net`
+- `netLabel` — net label at `x`/`y` (must land on a wire or pin)
+- `netFlag` — `Power` / `Ground` / `AnalogGround` / `ProtectGround` flag for a net
+- `netPort` — `IN` / `OUT` / `BI` net port
+- `text` — free annotation text
+- `modifyComponent` — modify an existing component's properties
+
+By default the batch stops at the first failing op (`continueOnError: false`); completed and failed ops are always reported per-op.
+
+### `easyeda_sch_delete`
+
+Deletes schematic primitives by primitive id (components, wires, texts, attributes), resolving each id's primitive type first. Mutating and destructive: requires an explicit confirmation phrase.
+
 ## Explicitly Confirmed Actions
 
 ### `easyeda_confirmed_action`

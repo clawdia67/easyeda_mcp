@@ -9,6 +9,38 @@ import {
   verifyConnections
 } from "./analysis.js";
 
+describe("wire geometry parsing", () => {
+  function snapshotWithWireLine(line: unknown) {
+    return buildSchematicSnapshot({
+      components: [{ primitiveId: "comp1", designator: "U1", name: "X", x: 440, y: 160 }],
+      pinsByComponent: {
+        comp1: [{ primitiveId: "comp1-p4", pinNumber: "4", pinName: "VIN", x: 480, y: 150 }]
+      },
+      wires: [{ primitiveId: "w1", net: "VBUS_5V_FLT", line }],
+      texts: [],
+      includeRaw: false
+    });
+  }
+
+  it("connects a pin to a wire whose line is a flat coordinate array (live EasyEDA Pro shape)", () => {
+    const snapshot = snapshotWithWireLine([480, 150, 510, 150]);
+    expect(snapshot.pins[0]?.connected).toBe(true);
+    expect(snapshot.pins[0]?.net).toBe("VBUS_5V_FLT");
+  });
+
+  it("connects a pin anywhere along a flat multi-point chain", () => {
+    const snapshot = snapshotWithWireLine([510, 190, 510, 150, 480, 150]);
+    expect(snapshot.pins[0]?.connected).toBe(true);
+    expect(snapshot.pins[0]?.net).toBe("VBUS_5V_FLT");
+  });
+
+  it("keeps every segment of a nested chain longer than four numbers", () => {
+    const snapshot = snapshotWithWireLine([[510, 190, 510, 150, 480, 150]]);
+    expect(snapshot.pins[0]?.connected).toBe(true);
+    expect(snapshot.pins[0]?.net).toBe("VBUS_5V_FLT");
+  });
+});
+
 describe("schematic analysis", () => {
   it("normalizes components, pins, wires, labels, and nets", () => {
     const snapshot = buildSchematicSnapshot({

@@ -202,6 +202,193 @@ describe("mutation confirmation guard", () => {
     });
   });
 
+  it("forwards device library searches to the bridge", async () => {
+    const bridge = {
+      endpoint: "ws://127.0.0.1:8765",
+      getStatus: () => ({ connected: true, updatedAt: new Date().toISOString() }),
+      call: vi.fn(async () => ({
+        query: "C141836",
+        count: 1,
+        devices: [{ uuid: "dev-1", libraryUuid: "lib-sys", name: "TLV62569DBVR" }]
+      }))
+    };
+    const client = await makeClient(bridge);
+
+    const result = await client.callTool({
+      name: "easyeda_search_devices",
+      arguments: { query: "C141836", limit: 5 }
+    });
+
+    expect(bridge.call).toHaveBeenCalledWith("libSearchDevices", {
+      query: "C141836",
+      limit: 5,
+      page: 1
+    }, 15_000);
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      result: {
+        count: 1,
+        devices: [{ uuid: "dev-1" }]
+      }
+    });
+  });
+
+  it("blocks schematic draw batches without explicit confirmation", async () => {
+    const bridge = {
+      endpoint: "ws://127.0.0.1:8765",
+      getStatus: () => ({ connected: true, updatedAt: new Date().toISOString() }),
+      call: vi.fn()
+    };
+    const client = await makeClient(bridge);
+
+    const result = await client.callTool({
+      name: "easyeda_sch_draw",
+      arguments: {
+        confirmation: "draw it",
+        ops: [{ op: "netLabel", net: "GND", x: 0, y: 0 }]
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("blocked");
+    expect(bridge.call).not.toHaveBeenCalled();
+  });
+
+  it("forwards confirmed schematic draw batches to the bridge", async () => {
+    const bridge = {
+      endpoint: "ws://127.0.0.1:8765",
+      getStatus: () => ({ connected: true, updatedAt: new Date().toISOString() }),
+      call: vi.fn(async () => ({
+        completed: 2,
+        failed: 0,
+        results: [
+          { index: 0, op: "placeComponent", ok: true, primitiveId: "$u1", pins: [] },
+          { index: 1, op: "wire", ok: true, primitiveId: "$w1" }
+        ]
+      }))
+    };
+    const client = await makeClient(bridge);
+
+    const result = await client.callTool({
+      name: "easyeda_sch_draw",
+      arguments: {
+        confirmation: "I confirm drawing these primitives",
+        ops: [
+          {
+            op: "placeComponent",
+            device: { uuid: "dev-1", libraryUuid: "lib-sys" },
+            x: 100,
+            y: 200,
+            designator: "U1"
+          },
+          { op: "wire", points: [[100, 200, 140, 200]], net: "VBUS_5V" }
+        ],
+        timeoutMs: 45_000
+      }
+    });
+
+    expect(bridge.call).toHaveBeenCalledWith("schDraw", {
+      ops: [
+        {
+          op: "placeComponent",
+          device: { uuid: "dev-1", libraryUuid: "lib-sys" },
+          x: 100,
+          y: 200,
+          designator: "U1"
+        },
+        { op: "wire", points: [[100, 200, 140, 200]], net: "VBUS_5V" }
+      ],
+      continueOnError: false
+    }, 45_000);
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      result: {
+        completed: 2,
+        failed: 0
+      }
+    });
+  });
+
+  it("rejects draw ops that do not match the op schema", async () => {
+    const bridge = {
+      endpoint: "ws://127.0.0.1:8765",
+      getStatus: () => ({ connected: true, updatedAt: new Date().toISOString() }),
+      call: vi.fn()
+    };
+    const client = await makeClient(bridge);
+
+    const result = await client.callTool({
+      name: "easyeda_sch_draw",
+      arguments: {
+        confirmation: "I confirm",
+        ops: [{ op: "placeComponent", x: 0, y: 0 }]
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(bridge.call).not.toHaveBeenCalled();
+  });
+
+  it("gates schematic deletes behind explicit confirmation and forwards ids", async () => {
+    const bridge = {
+      endpoint: "ws://127.0.0.1:8765",
+      getStatus: () => ({ connected: true, updatedAt: new Date().toISOString() }),
+      call: vi.fn(async () => ({
+        results: [{ primitiveId: "$u1", type: "Component", deleted: true }]
+      }))
+    };
+    const client = await makeClient(bridge);
+
+    const blocked = await client.callTool({
+      name: "easyeda_sch_delete",
+      arguments: { confirmation: "delete them", primitiveIds: ["$u1"] }
+    });
+    expect(blocked.isError).toBe(true);
+    expect(bridge.call).not.toHaveBeenCalled();
+
+    const result = await client.callTool({
+      name: "easyeda_sch_delete",
+      arguments: { confirmation: "confirmed, delete", primitiveIds: ["$u1"] }
+    });
+    expect(bridge.call).toHaveBeenCalledWith("schDelete", {
+      primitiveIds: ["$u1"]
+    }, 30_000);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("gates PCB draw batches behind confirmation and forwards ops", async () => {
+    const bridge = {
+      endpoint: "ws://127.0.0.1:8765",
+      getStatus: () => ({ connected: true, updatedAt: new Date().toISOString() }),
+      call: vi.fn(async () => ({ completed: 1, failed: 0, results: [{ index: 0, op: "moveComponent", ok: true, primitiveId: "$u6" }] }))
+    };
+    const client = await makeClient(bridge);
+
+    const blocked = await client.callTool({
+      name: "easyeda_pcb_draw",
+      arguments: {
+        confirmation: "move it",
+        ops: [{ op: "moveComponent", designator: "U6", x: 100, y: 100 }]
+      }
+    });
+    expect(blocked.isError).toBe(true);
+    expect(bridge.call).not.toHaveBeenCalled();
+
+    const result = await client.callTool({
+      name: "easyeda_pcb_draw",
+      arguments: {
+        confirmation: "I confirm the move",
+        ops: [{ op: "moveComponent", designator: "U6", x: 100, y: 100 }],
+        timeoutMs: 30_000
+      }
+    });
+    expect(bridge.call).toHaveBeenCalledWith("pcbDraw", {
+      ops: [{ op: "moveComponent", designator: "U6", x: 100, y: 100 }],
+      continueOnError: false
+    }, 30_000);
+    expect(result.isError).toBeFalsy();
+  });
+
   it("marks the active document as available when documentInfo exists", async () => {
     const bridge = {
       endpoint: "ws://127.0.0.1:8765",
