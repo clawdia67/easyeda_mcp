@@ -960,6 +960,10 @@ async function pcbInfo(params: Record<string, any>): Promise<Record<string, unkn
         entry.bbox = sanitize(bbox);
       }
     }
+    if (params.includePads === true && entry.primitiveId && eda.pcb_PrimitiveComponent?.getAllPinsByPrimitiveId) {
+      const pads = toArray(await optionalCall(() => eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(String(entry.primitiveId))));
+      entry.pads = pads.map(simplifyPcbPad);
+    }
     simplified.push(entry);
   }
   const nets = await optionalCall(() => getPcbNetNames());
@@ -1133,35 +1137,69 @@ async function runPcbDrawOp(op: Record<string, any>): Promise<Record<string, unk
   }
 }
 
+const PCB_DELETE_APIS: Record<string, string> = {
+  Component: "pcb_PrimitiveComponent",
+  Wire: "pcb_PrimitiveLine",
+  Line: "pcb_PrimitiveLine",
+  Arc: "pcb_PrimitiveArc",
+  Via: "pcb_PrimitiveVia",
+  Region: "pcb_PrimitiveRegion",
+  Pour: "pcb_PrimitivePour",
+  Fill: "pcb_PrimitiveFill",
+  String: "pcb_PrimitiveString",
+  Polyline: "pcb_PrimitivePolyline"
+};
+
 async function pcbDelete(params: Record<string, any>): Promise<Record<string, unknown>> {
-  ensureApi("pcb_Primitive", "getPrimitiveTypeByPrimitiveId");
   const primitiveIds = toArray(params.primitiveIds).map(String).filter((id) => id.trim());
   if (primitiveIds.length === 0) {
     throw apiError("no_primitive_ids", "pcbDelete requires at least one primitive id.");
   }
-  const deleteApis: Record<string, string> = {
-    Component: "pcb_PrimitiveComponent",
-    Line: "pcb_PrimitiveLine",
-    Arc: "pcb_PrimitiveArc",
-    Via: "pcb_PrimitiveVia",
-    Region: "pcb_PrimitiveRegion",
-    Pour: "pcb_PrimitivePour",
-    Fill: "pcb_PrimitiveFill",
-    String: "pcb_PrimitiveString",
-    Polyline: "pcb_PrimitivePolyline"
-  };
   const results: Array<Record<string, unknown>> = [];
   for (const primitiveId of primitiveIds) {
-    const type = String(await eda.pcb_Primitive.getPrimitiveTypeByPrimitiveId(primitiveId) ?? "");
-    const api = deleteApis[type];
-    if (!api || !eda[api]?.delete) {
-      results.push({ primitiveId, type: type || undefined, deleted: false, reason: `No delete API for PCB primitive type "${type || "unknown"}".` });
+    const type = String((await optionalCall(() =>
+      eda.pcb_Primitive?.getPrimitiveTypeByPrimitiveId ? eda.pcb_Primitive.getPrimitiveTypeByPrimitiveId(primitiveId) : undefined
+    )) ?? "");
+    const api = PCB_DELETE_APIS[type];
+    if (api && eda[api]?.delete) {
+      const deleted = await eda[api].delete(primitiveId);
+      results.push({ primitiveId, type, deleted: deleted === true });
       continue;
     }
-    const deleted = await eda[api].delete(primitiveId);
-    results.push({ primitiveId, type, deleted: deleted === true });
+    // The type lookup returns nothing for every PCB primitive in some app
+    // builds - fall back to trying each class delete until one accepts the id.
+    let deleted = false;
+    let via: string | undefined;
+    for (const candidate of [...new Set(Object.values(PCB_DELETE_APIS))]) {
+      if (!eda[candidate]?.delete) {
+        continue;
+      }
+      const ok = await optionalCall(() => eda[candidate].delete(primitiveId));
+      if (ok === true) {
+        deleted = true;
+        via = candidate;
+        break;
+      }
+    }
+    results.push(deleted
+      ? { primitiveId, type: via, deleted: true, fallback: true }
+      : { primitiveId, type: type || undefined, deleted: false, reason: "No delete API accepted this primitive id." });
   }
   return { results, betaApi: true };
+}
+
+function simplifyPcbPad(value: unknown): Record<string, unknown> {
+  const record = isRecord(value) ? value as Record<string, any> : {};
+  const call = (name: string): unknown => (typeof record[name] === "function" ? record[name]() : undefined);
+  return {
+    primitiveId: call("getState_PrimitiveId") ?? record.primitiveId ?? record.id,
+    padNumber: call("getState_PadNumber") ?? call("getState_Number") ?? record.padNumber ?? record.number,
+    net: call("getState_Net") ?? record.net,
+    x: call("getState_X") ?? record.x,
+    y: call("getState_Y") ?? record.y,
+    layer: call("getState_Layer") ?? record.layer,
+    rotation: call("getState_Rotation") ?? record.rotation
+  };
 }
 
 function readPrimitiveId(value: unknown): string | undefined {

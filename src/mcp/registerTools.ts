@@ -635,6 +635,7 @@ export function registerEasyEdaTools(server: McpServer, bridge: EasyEdaBridge): 
     method: "pcbInfo",
     inputSchema: {
       includeBBox: z.boolean().default(false).describe("Also fetch each component's bounding box (slower)."),
+      includePads: z.boolean().default(false).describe("Also fetch each component's pads (pad number, net, x/y in mil) — required for routing tracks to exact pad positions."),
       timeoutMs: DefaultTimeoutSchema.default(30_000)
     },
     summary: "Fetched EasyEDA Pro PCB info."

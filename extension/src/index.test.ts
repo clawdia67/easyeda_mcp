@@ -538,6 +538,67 @@ describe("EasyEDA extension bridge handlers", () => {
     expect(resultMessage.result.completed).toBe(2);
   });
 
+  it("returns PCB component pads when includePads is set", async () => {
+    vi.stubGlobal("eda", {
+      ...(globalThis as { eda: Record<string, unknown> }).eda,
+      pcb_PrimitiveComponent: {
+        getAll: vi.fn(async () => [
+          { getState_PrimitiveId: () => "$pcb-j1", getState_Designator: () => "J1", getState_X: () => 206, getState_Y: () => -415 }
+        ]),
+        getAllPinsByPrimitiveId: vi.fn(async () => [
+          { getState_PrimitiveId: () => "$pcb-j1-a6", getState_PadNumber: () => "A6", getState_Net: () => "USB_DP", getState_X: () => 180, getState_Y: () => -400 }
+        ])
+      },
+      pcb_Net: { getAllNetsName: vi.fn(async () => ["USB_DP"]) }
+    });
+
+    const extension = await import("./index.js");
+    extension.connect();
+    await registration.onMessage?.({
+      data: JSON.stringify({
+        kind: "call",
+        requestId: "pads-1",
+        method: "pcbInfo",
+        params: { includePads: true }
+      })
+    } as MessageEvent<string>);
+
+    const resultMessage = JSON.parse(sentMessages.at(-1)?.message ?? "{}");
+    expect(resultMessage.result.components[0].pads).toEqual([
+      { primitiveId: "$pcb-j1-a6", padNumber: "A6", net: "USB_DP", x: 180, y: -400, layer: undefined, rotation: undefined }
+    ]);
+  });
+
+  it("falls back to per-class deletes when the PCB type lookup returns nothing", async () => {
+    const lineDelete = vi.fn(async (id: string) => id === "$outline-1");
+    const componentDelete = vi.fn(async () => false);
+    vi.stubGlobal("eda", {
+      ...(globalThis as { eda: Record<string, unknown> }).eda,
+      pcb_Primitive: { getPrimitiveTypeByPrimitiveId: vi.fn(async () => undefined) },
+      pcb_PrimitiveComponent: { delete: componentDelete },
+      pcb_PrimitiveLine: { delete: lineDelete }
+    });
+
+    const extension = await import("./index.js");
+    extension.connect();
+    await registration.onMessage?.({
+      data: JSON.stringify({
+        kind: "call",
+        requestId: "pcbdel-1",
+        method: "pcbDelete",
+        params: { primitiveIds: ["$outline-1"] }
+      })
+    } as MessageEvent<string>);
+
+    const resultMessage = JSON.parse(sentMessages.at(-1)?.message ?? "{}");
+    expect(resultMessage.result.results[0]).toMatchObject({
+      primitiveId: "$outline-1",
+      deleted: true,
+      fallback: true,
+      type: "pcb_PrimitiveLine"
+    });
+  });
+
   it("creates a board via confirmedAction createBoard", async () => {
     const createBoard = vi.fn(async () => "Board1");
     vi.stubGlobal("eda", {
